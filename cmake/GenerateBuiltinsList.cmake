@@ -14,5 +14,7 @@ function(v8_generate_builtins_list target-dir)
     VERBATIM)
   add_library(v8-bytecodes-builtin-list INTERFACE)
   target_include_directories(v8-bytecodes-builtin-list INTERFACE ${target-dir})
+
+  set_source_files_properties(${output} PROPERTIES GENERATED 1)
   target_sources(v8-bytecodes-builtin-list INTERFACE ${output})
 endfunction()

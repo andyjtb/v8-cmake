@@ -16,6 +16,7 @@ if(MSVC)
 
 endif()
 
+add_definitions("-DV8_ENABLE_TURBOFAN")
 add_definitions("-DV8_ENABLE_WEBASSEMBLY -DV8_ADVANCED_BIGINT_ALGORITHMS -DV8_ENABLE_WASM_SIMD256_REVEC")
 if(WIN32)
   add_definitions("-DNOMINMAX -DV8_ENABLE_SYSTEM_INSTRUMENTATION")
@@ -88,6 +89,8 @@ string(CONCAT is-x64 $<OR:
 >)
 
 option(V8_ENABLE_CONCURRENT_MARKING "Enable concurrent marking" ON)
+option(V8_ENABLE_SPARKPLUG "" ON)
+option(V8_ENABLE_MAGLEV "" ON)
 option(V8_ENABLE_I18N "Enable Internationalization support")
 
 set(
@@ -106,6 +109,8 @@ set(
   $<$<AND:${is-win},${is-x64}>:V8_OS_WIN_X64>
   $<$<BOOL:${V8_ENABLE_CONCURRENT_MARKING}>:V8_CONCURRENT_MARKING>
   $<${is-win}:V8_OS_WIN32>
+  $<$<BOOL:${V8_ENABLE_SPARKPLUG}>:V8_ENABLE_SPARKPLUG>
+  $<$<BOOL:${V8_ENABLE_MAGLEV}>:V8_ENABLE_MAGLEV>
 )
 
 set(disable-exceptions
@@ -127,6 +132,8 @@ set(enable-fpic
   $<$<CXX_COMPILER_ID:Clang>:-fPIC>
   $<$<CXX_COMPILER_ID:GNU>:-fPIC>
 )
+
+add_subdirectory(v8/third_party/abseil-cpp)
 
 #
 # d8
@@ -165,6 +172,8 @@ target_link_libraries(d8
     v8_snapshot
     v8_inspector
     v8_libplatform
+    absl::base
+    absl::flat_hash_map
 )
 
 # add shell and hello-world
@@ -477,10 +486,11 @@ endif()
 target_include_directories(v8_base_without_compiler
   PRIVATE
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/v8/include>
-    $<BUILD_INTERFACE:$<TARGET_PROPERTY:v8-bytecodes-builtin-list,INTERFACE_INCLUDE_DIRECTORIES>>
     ${PROJECT_SOURCE_DIR}/v8
     ${PROJECT_SOURCE_DIR}/v8/third_party/zlib
     ${PROJECT_BINARY_DIR}
+  PUBLIC
+    ${PROJECT_BINARY_DIR}/generated/
 )
 
 target_link_libraries(
@@ -489,8 +499,6 @@ target_link_libraries(
     v8_libbase
     v8_libsampler
     v8_torque_generated
-  PUBLIC
-    v8-bytecodes-builtin-list
 )
 
 #
@@ -516,7 +524,7 @@ target_include_directories(v8_compiler
   PRIVATE
     ${PROJECT_BINARY_DIR}
     ${PROJECT_SOURCE_DIR}/v8
-    $<BUILD_INTERFACE:$<TARGET_PROPERTY:v8-bytecodes-builtin-list,INTERFACE_INCLUDE_DIRECTORIES>>
+    ${PROJECT_BINARY_DIR}/generated/
 )
 
 target_link_libraries(v8_compiler
@@ -524,9 +532,45 @@ target_link_libraries(v8_compiler
     v8_libbase
     v8_base_without_compiler
     v8_torque_generated
-  PUBLIC
-    v8-bytecodes-builtin-list
 )
+
+if (V8_ENABLE_MAGLEV)
+  file(GLOB maglev-sources
+    RELATIVE ${PROJECT_SOURCE_DIR}
+    CONFIGURE_DEPENDS v8/src/maglev/*.cc
+  )
+  add_library(v8_maglev STATIC
+    $<${is-arm}:v8/src/maglev/arm/maglev-assembler-arm.cc>
+    $<${is-arm}:v8/src/maglev/arm/maglev-ir-arm.cc>
+    $<${is-arm64}:v8/src/maglev/arm64/maglev-assembler-arm64.cc>
+    $<${is-arm64}:v8/src/maglev/arm64/maglev-ir-arm64.cc>
+    $<${is-x64}:v8/src/maglev/x64/maglev-assembler-x64.cc>
+    $<${is-x64}:v8/src/maglev/x64/maglev-ir-x64.cc>
+    ${maglev-sources}
+  )
+
+  target_include_directories(v8_maglev
+    PRIVATE
+      ${PROJECT_BINARY_DIR}
+      ${PROJECT_SOURCE_DIR}/v8
+      ${PROJECT_BINARY_DIR}/generated/
+  )
+
+  target_link_libraries(v8_maglev
+    PRIVATE
+      v8_libbase
+      v8_base_without_compiler
+      v8_torque_generated
+  )
+  target_compile_definitions(v8_maglev
+    PUBLIC
+      ${v8_defines}
+  )
+  target_link_libraries(v8_compiler
+    PUBLIC
+      v8_maglev
+  )
+endif()
 
 #
 # v8_initializers
@@ -593,11 +637,12 @@ endif()
 
 target_include_directories(v8_initializers
   PRIVATE
+    ${PROJECT_BINARY_DIR}/generated/
     ${PROJECT_SOURCE_DIR}/v8
     ${PROJECT_BINARY_DIR}
 )
 
-target_link_libraries(v8_initializers PRIVATE v8_torque_generated v8-bytecodes-builtin-list)
+target_link_libraries(v8_initializers PRIVATE v8_torque_generated)
 
 #
 # v8_snapshot
@@ -622,7 +667,6 @@ target_include_directories(v8_snapshot PRIVATE ${PROJECT_SOURCE_DIR}/v8)
 target_link_libraries(v8_snapshot
   PRIVATE
     v8_torque_generated
-    v8-bytecodes-builtin-list
 )
 
 # Note: allow passing in v8_random_seed
@@ -812,6 +856,7 @@ target_link_libraries(v8_libsampler PRIVATE v8_libbase)
 #
 
 add_library(v8_libbase STATIC
+  v8/src/base/abort-mode.cc
   v8/src/base/bits.cc
   v8/src/base/bounded-page-allocator.cc
   v8/src/base/cpu.cc
@@ -855,7 +900,10 @@ target_compile_options(v8_libbase PRIVATE ${disable-exceptions})
 if(enable-fPIC)
   target_compile_options(v8_libbase PRIVATE ${enable-fpic})
 endif()
-target_include_directories(v8_libbase PRIVATE ${PROJECT_SOURCE_DIR}/v8)
+target_include_directories(v8_libbase
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/v8
+)
 target_link_libraries(v8_libbase
   PRIVATE
     Threads::Threads
@@ -863,18 +911,15 @@ target_link_libraries(v8_libbase
     $<${is-linux}:rt>
     $<${is-win}:winmm>
     $<${is-win}:dbghelp>
+
+  PUBLIC
+    absl::base
+    absl::flat_hash_map
 )
 
 #
 # bytecode_builtins_list_generator
 #
-v8_generate_builtins_list(${PROJECT_BINARY_DIR}/generated)
-
-target_include_directories(v8-bytecodes-builtin-list
-  INTERFACE
-    ${PROJECT_BINARY_DIR}/generated
-)
-
 add_executable(
   bytecode_builtins_list_generator
   v8/src/builtins/generate-bytecodes-builtins-list.cc
@@ -882,13 +927,32 @@ add_executable(
   v8/src/interpreter/bytecodes.cc
 )
 
-target_include_directories(bytecode_builtins_list_generator
-  PRIVATE
-    ${PROJECT_SOURCE_DIR}/v8
-)
-
+target_include_directories(bytecode_builtins_list_generator PRIVATE ${CMAKE_CURRENT_LIST_DIR}/v8)
 target_link_libraries(bytecode_builtins_list_generator v8_libbase)
 
+add_custom_command(
+  COMMAND ${CMAKE_COMMAND} -E echo "Generating ${PROJECT_BINARY_DIR}/generated/builtins-generated"
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_BINARY_DIR}/generated/builtins-generated
+  DEPENDS bytecode_builtins_list_generator
+  OUTPUT ${PROJECT_BINARY_DIR}/generated/builtins-generated
+  COMMENT "Generating ${PROJECT_BINARY_DIR}/generated/builtins-generated"
+  VERBATIM)
+
+add_custom_command(
+  COMMAND ${CMAKE_COMMAND} -E echo "Generating ${PROJECT_BINARY_DIR}/generated/builtins-generated/bytecodes-builtins-list.h"
+  COMMAND bytecode_builtins_list_generator ${PROJECT_BINARY_DIR}/generated/builtins-generated/bytecodes-builtins-list.h
+  DEPENDS bytecode_builtins_list_generator ${PROJECT_BINARY_DIR}/generated/builtins-generated
+  OUTPUT ${PROJECT_BINARY_DIR}/generated/builtins-generated/bytecodes-builtins-list.h
+  COMMENT "Generating ${PROJECT_BINARY_DIR}/generated/builtins-generated/bytecodes-builtins-list.h"
+  VERBATIM)
+
+message(STATUS "Add ${PROJECT_BINARY_DIR}/generated/builtins-generated/bytecodes-builtins-list.h")
+
+add_custom_target(
+  v8-bytecodes-builtin-list
+  DEPENDS ${PROJECT_BINARY_DIR}/generated/builtins-generated/bytecodes-builtins-list.h
+  COMMENT "Custom target for generating bytecodes-builtins-list.h"
+)
 #
 # v8_torque_generated
 #
@@ -990,13 +1054,15 @@ target_compile_options(v8_torque_generated PRIVATE ${disable-exceptions})
 if(enable-fPIC)
   target_compile_options(v8_torque_generated PRIVATE ${enable-fpic})
 endif()
-target_link_libraries(v8_torque_generated PRIVATE v8-bytecodes-builtin-list)
+add_dependencies(v8_torque_generated v8-bytecodes-builtin-list)
 
 target_include_directories(v8_torque_generated
   PUBLIC
     ${PROJECT_BINARY_DIR}
     ${PROJECT_SOURCE_DIR}/v8/include
     ${PROJECT_SOURCE_DIR}/v8
+    ${PROJECT_BINARY_DIR}/generated/
+    ${PROJECT_SOURCE_DIR}/v8/third_party/abseil-cpp
 )
 
 # The torque-outputs and torque_outputs variables can have too many characters
@@ -1061,6 +1127,7 @@ add_executable(mksnapshot
   v8/src/snapshot/snapshot-empty.cc
 )
 
+add_dependencies(mksnapshot v8-bytecodes-builtin-list)
 target_compile_definitions(mksnapshot PRIVATE $<${is-msvc}:_HAS_EXCEPTIONS=0>)
 target_compile_options(mksnapshot PRIVATE ${disable-exceptions})
 target_include_directories(mksnapshot PRIVATE ${PROJECT_SOURCE_DIR}/v8)
@@ -1071,7 +1138,6 @@ target_link_libraries(mksnapshot
     v8_base_without_compiler
     v8_compiler
     v8_initializers
-    v8-bytecodes-builtin-list
     v8_torque_generated
 )
 
