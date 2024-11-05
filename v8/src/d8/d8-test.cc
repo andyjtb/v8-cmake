@@ -158,8 +158,8 @@ class FastCApiObject {
 
     // For Wasm call, we don't pass FastCApiObject as the receiver, so we need
     // to retrieve the FastCApiObject instance from a static variable.
-    if (Utils::OpenHandle(*receiver)->IsJSGlobalProxy() ||
-        Utils::OpenHandle(*receiver)->IsUndefined()) {
+    if (IsJSGlobalProxy(*Utils::OpenHandle(*receiver)) ||
+        IsUndefined(*Utils::OpenHandle(*receiver))) {
       // Note: FastCApiObject::instance() returns the reference of an object
       // allocated in thread-local storage, its value cannot be stored in a
       // static variable here.
@@ -316,10 +316,7 @@ class FastCApiObject {
       v8::MaybeLocal<v8::Value> maybe_element =
           seq_arg->Get(isolate->GetCurrentContext(),
                        v8::Integer::NewFromUnsigned(isolate, i));
-      if (maybe_element.IsEmpty()) {
-        isolate->ThrowError("invalid element in JSArray");
-        return;
-      }
+      if (maybe_element.IsEmpty()) return;
 
       v8::Local<v8::Value> element = maybe_element.ToLocalChecked();
       if (element->IsNumber()) {
@@ -1181,6 +1178,13 @@ class FastCApiObject {
     return a + b;
   }
 
+  template <typename T>
+  static bool Convert(double value, T* out_result) {
+    if (!IsInRange<T>(value)) return false;
+    *out_result = static_cast<T>(value);
+    return true;
+  }
+
   static void sumInt64AsNumberSlowCallback(
       const FunctionCallbackInfo<Value>& info) {
     Isolate* isolate = info.GetIsolate();
@@ -1197,20 +1201,24 @@ class FastCApiObject {
     Local<Value> value_a = info[0];
     Local<Value> value_b = info[1];
 
-    int64_t a;
-    if (value_a->IsNumber()) {
-      a = static_cast<int64_t>(value_a.As<Number>()->Value());
-    } else {
+    if (!value_a->IsNumber()) {
       info.GetIsolate()->ThrowError("Did not get a number as first parameter.");
       return;
     }
+    int64_t a;
+    if (!Convert(value_a.As<Number>()->Value(), &a)) {
+      info.GetIsolate()->ThrowError("First number is out of int64_t range.");
+      return;
+    }
 
-    int64_t b;
-    if (value_b->IsNumber()) {
-      b = static_cast<int64_t>(value_b.As<Number>()->Value());
-    } else {
+    if (!value_b->IsNumber()) {
       info.GetIsolate()->ThrowError(
           "Did not get a number as second parameter.");
+      return;
+    }
+    int64_t b;
+    if (!Convert(value_b.As<Number>()->Value(), &b)) {
+      info.GetIsolate()->ThrowError("Second number is out of int64_t range.");
       return;
     }
 
@@ -1279,20 +1287,24 @@ class FastCApiObject {
     Local<Value> value_a = info[0];
     Local<Value> value_b = info[1];
 
-    uint64_t a;
-    if (value_a->IsNumber()) {
-      a = static_cast<uint64_t>(value_a.As<Number>()->Value());
-    } else {
+    if (!value_a->IsNumber()) {
       info.GetIsolate()->ThrowError("Did not get a number as first parameter.");
       return;
     }
+    uint64_t a;
+    if (!Convert(value_a.As<Number>()->Value(), &a)) {
+      info.GetIsolate()->ThrowError("First number is out of uint64_t range.");
+      return;
+    }
 
-    uint64_t b;
-    if (value_b->IsNumber()) {
-      b = static_cast<uint64_t>(value_b.As<Number>()->Value());
-    } else {
+    if (!value_b->IsNumber()) {
       info.GetIsolate()->ThrowError(
           "Did not get a number as second parameter.");
+      return;
+    }
+    uint64_t b;
+    if (!Convert(value_b.As<Number>()->Value(), &b)) {
+      info.GetIsolate()->ThrowError("Second number is out of uint64_t range.");
       return;
     }
 
@@ -1875,6 +1887,23 @@ Local<FunctionTemplate> Shell::CreateTestFastCApiTemplate(Isolate* isolate) {
         FunctionTemplate::New(isolate, FastCApiObject::ResetCounts,
                               Local<Value>(), signature, 1,
                               ConstructorBehavior::kThrow));
+
+    CFunction add_all_32bit_int_5args_enforce_range_c_func =
+        CFunctionBuilder()
+            .Fn(FastCApiObject::AddAll32BitIntFastCallback_5Args)
+            .Arg<3, v8::CTypeInfo::Flags::kEnforceRangeBit>()
+            .Arg<5, v8::CTypeInfo::Flags::kEnforceRangeBit>()
+#ifdef V8_USE_SIMULATOR_WITH_GENERIC_C_CALLS
+            .Patch(FastCApiObject::AddAll32BitIntFastCallback_5ArgsPatch)
+#endif  // V8_USE_SIMULATOR_WITH_GENERIC_C_CALLS
+            .Build();
+    api_obj_ctor->PrototypeTemplate()->Set(
+        isolate, "add_all_5args_enforce_range",
+        FunctionTemplate::New(
+            isolate, FastCApiObject::AddAll32BitIntSlowCallback, Local<Value>(),
+            signature, 1, ConstructorBehavior::kThrow,
+            SideEffectType::kHasNoSideEffect,
+            &add_all_32bit_int_5args_enforce_range_c_func));
   }
   api_obj_ctor->InstanceTemplate()->SetInternalFieldCount(
       FastCApiObject::kV8WrapperObjectIndex + 1);

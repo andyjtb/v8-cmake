@@ -32,7 +32,7 @@ void FillCurrentPage(v8::internal::NewSpace* space,
                      std::vector<Handle<FixedArray>>* out_handles = nullptr);
 
 void FillCurrentPageButNBytes(
-    v8::internal::NewSpace* space, int extra_bytes,
+    v8::internal::SemiSpaceNewSpace* space, int extra_bytes,
     std::vector<Handle<FixedArray>>* out_handles = nullptr);
 
 // Helper function that simulates many incremental marking steps until
@@ -67,7 +67,7 @@ bool InYoungGeneration(v8::Isolate* isolate, const GlobalOrPersistent& global) {
   return i::Heap::InYoungGeneration(*v8::Utils::OpenHandle(*tmp));
 }
 
-bool InCorrectGeneration(HeapObject object);
+bool InCorrectGeneration(Tagged<HeapObject> object);
 
 template <typename GlobalOrPersistent>
 bool InCorrectGeneration(v8::Isolate* isolate,
@@ -111,7 +111,7 @@ class V8_NODISCARD ManualGCScope final {
   Isolate* const isolate_;
   const bool flag_concurrent_marking_;
   const bool flag_concurrent_sweeping_;
-  const bool flag_concurrent_minor_mc_marking_;
+  const bool flag_concurrent_minor_ms_marking_;
   const bool flag_stress_concurrent_allocation_;
   const bool flag_stress_incremental_marking_;
   const bool flag_parallel_marking_;

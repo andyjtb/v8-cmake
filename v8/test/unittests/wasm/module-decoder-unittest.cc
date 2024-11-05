@@ -1052,6 +1052,24 @@ TEST_F(WasmModuleVerifyTest, TypeCanonicalization) {
   EXPECT_FAILURE_WITH_MSG(
       non_identical_group,
       "type error in constant expression[0] (expected (ref 0), got (ref 1))");
+
+  static const uint8_t empty_group[] = {
+      SECTION(Type,            // --
+              ENTRY_COUNT(1),  // one rec. group
+              kWasmRecursiveTypeGroupCode, ENTRY_COUNT(0))};
+
+  EXPECT_VERIFIES(empty_group);
+
+  static const uint8_t mixed_empty_and_nonempty_groups[] = {SECTION(
+      Type,                                         // --
+      ENTRY_COUNT(4),                               // one rec. group
+      kWasmRecursiveTypeGroupCode, ENTRY_COUNT(0),  // empty
+      SIG_ENTRY_v_v,                                // one type
+      kWasmRecursiveTypeGroupCode, ENTRY_COUNT(0),  // empty
+      SIG_ENTRY_v_v                                 // one type
+      )};
+
+  EXPECT_VERIFIES(mixed_empty_and_nonempty_groups);
 }
 
 // Tests that all types in a rec. group are checked for supertype validity.
@@ -1098,7 +1116,6 @@ TEST_F(WasmModuleVerifyTest, NoSupertypeSupertype) {
 TEST_F(WasmModuleVerifyTest, NonSpecifiedFinalType) {
   WASM_FEATURE_SCOPE(typed_funcref);
   WASM_FEATURE_SCOPE(gc);
-  FLAG_SCOPE(wasm_final_types);
   static const uint8_t final_supertype[] = {
       SECTION(Type, ENTRY_COUNT(2),                 // --
               kWasmStructTypeCode, 1, kI32Code, 1,  // --
@@ -1110,7 +1127,6 @@ TEST_F(WasmModuleVerifyTest, NonSpecifiedFinalType) {
 TEST_F(WasmModuleVerifyTest, SpecifiedFinalType) {
   WASM_FEATURE_SCOPE(typed_funcref);
   WASM_FEATURE_SCOPE(gc);
-  FLAG_SCOPE(wasm_final_types);
   static const uint8_t final_supertype[] = {
       SECTION(Type, ENTRY_COUNT(2),                 // --
               kWasmSubtypeFinalCode, 0,             // --
@@ -1298,28 +1314,38 @@ TEST_F(WasmModuleVerifyTest, CanonicalTypeIds) {
 
   static const uint8_t data[] = {
       SECTION(Type,                               // --
-              ENTRY_COUNT(5),                     // --
+              ENTRY_COUNT(7),                     // --
               WASM_STRUCT_DEF(                    // Struct definition
                   FIELD_COUNT(1),                 // --
                   STRUCT_FIELD(kI32Code, true)),  // --
               SIG_ENTRY_x_x(kI32Code, kF32Code),  // f32 -> i32
               SIG_ENTRY_x_x(kI32Code, kF64Code),  // f64 -> i32
               SIG_ENTRY_x_x(kI32Code, kF32Code),  // f32 -> i32 (again)
-              WASM_ARRAY_DEF(kI32Code, true))     // Array definition
+              WASM_ARRAY_DEF(kI32Code, true),     // Array definition
+              kWasmRecursiveTypeGroupCode, ENTRY_COUNT(1),
+              WASM_ARRAY_DEF(kI16Code, true),  // Predefined i16 array
+              kWasmRecursiveTypeGroupCode, ENTRY_COUNT(1),
+              WASM_ARRAY_DEF(kI8Code, true))  // Predefined i8 array
   };
 
   ModuleResult result = DecodeModule(base::ArrayVector(data));
   EXPECT_OK(result);
   const WasmModule* module = result.value().get();
 
-  EXPECT_EQ(5u, module->types.size());
-  EXPECT_EQ(5u, module->isorecursive_canonical_type_ids.size());
+  EXPECT_EQ(7u, module->types.size());
+  EXPECT_EQ(7u, module->isorecursive_canonical_type_ids.size());
 
-  EXPECT_EQ(0u, module->isorecursive_canonical_type_ids[0]);
-  EXPECT_EQ(1u, module->isorecursive_canonical_type_ids[1]);
-  EXPECT_EQ(2u, module->isorecursive_canonical_type_ids[2]);
-  EXPECT_EQ(1u, module->isorecursive_canonical_type_ids[3]);
-  EXPECT_EQ(3u, module->isorecursive_canonical_type_ids[4]);
+  static constexpr uint32_t kBase = TypeCanonicalizer::kNumberOfPredefinedTypes;
+  EXPECT_EQ(kBase + 0u, module->isorecursive_canonical_type_ids[0]);
+  EXPECT_EQ(kBase + 1u, module->isorecursive_canonical_type_ids[1]);
+  EXPECT_EQ(kBase + 2u, module->isorecursive_canonical_type_ids[2]);
+  EXPECT_EQ(kBase + 1u, module->isorecursive_canonical_type_ids[3]);
+  EXPECT_EQ(kBase + 3u, module->isorecursive_canonical_type_ids[4]);
+
+  EXPECT_EQ(TypeCanonicalizer::kPredefinedArrayI16Index,
+            module->isorecursive_canonical_type_ids[5]);
+  EXPECT_EQ(TypeCanonicalizer::kPredefinedArrayI8Index,
+            module->isorecursive_canonical_type_ids[6]);
 }
 
 TEST_F(WasmModuleVerifyTest, DataSegmentWithImmutableImportedGlobal) {
@@ -1941,23 +1967,7 @@ TEST_F(WasmModuleVerifyTest, ElementSectionGlobalGetOutOfBounds) {
   EXPECT_FAILURE_WITH_MSG(data, "Invalid global index: 0");
 }
 
-// Make sure extended constants do not work without the experimental feature.
-TEST_F(WasmModuleVerifyTest, ExtendedConstantsFail) {
-  static const uint8_t data[] = {
-      SECTION(Import, ENTRY_COUNT(1),         // one import
-              0x01, 'm', 0x01, 'g',           // module, name
-              kExternalGlobal, kI32Code, 0),  // type, mutability
-      SECTION(Global, ENTRY_COUNT(1),         // one defined global
-              kI32Code, 0,                    // type, mutability
-              // initializer
-              kExprGlobalGet, 0x00, kExprGlobalGet, 0x00, kExprI32Add,
-              kExprEnd)};
-  EXPECT_FAILURE_WITH_MSG(
-      data, "opcode i32.add is not allowed in constant expressions");
-}
-
 TEST_F(WasmModuleVerifyTest, ExtendedConstantsI32) {
-  WASM_FEATURE_SCOPE(extended_const);
   static const uint8_t data[] = {
       SECTION(Import, ENTRY_COUNT(1),         // one import
               0x01, 'm', 0x01, 'g',           // module, name
@@ -1972,7 +1982,6 @@ TEST_F(WasmModuleVerifyTest, ExtendedConstantsI32) {
 }
 
 TEST_F(WasmModuleVerifyTest, ExtendedConstantsI64) {
-  WASM_FEATURE_SCOPE(extended_const);
   static const uint8_t data[] = {
       SECTION(Import, ENTRY_COUNT(1),         // one import
               0x01, 'm', 0x01, 'g',           // module, name
@@ -1987,7 +1996,6 @@ TEST_F(WasmModuleVerifyTest, ExtendedConstantsI64) {
 }
 
 TEST_F(WasmModuleVerifyTest, ExtendedConstantsTypeError) {
-  WASM_FEATURE_SCOPE(extended_const);
   static const uint8_t data[] = {
       SECTION(Import, ENTRY_COUNT(1),         // one import
               0x01, 'm', 0x01, 'g',           // module, name

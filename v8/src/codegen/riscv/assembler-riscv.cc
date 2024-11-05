@@ -38,7 +38,6 @@
 #include "src/base/cpu.h"
 #include "src/codegen/assembler-inl.h"
 #include "src/codegen/safepoint-table.h"
-#include "src/codegen/string-constants.h"
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/diagnostics/disasm.h"
 #include "src/diagnostics/disassembler.h"
@@ -59,6 +58,18 @@ static unsigned CpuFeaturesImpliedByCompiler() {
 #if (defined CAN_USE_RVV_INSTRUCTIONS)
   answer |= 1u << RISCV_SIMD;
 #endif  // def CAN_USE_RVV_INSTRUCTIONS
+
+#if (defined CAN_USE_ZBA_INSTRUCTIONS)
+  answer |= 1u << ZBA;
+#endif  // def CAN_USE_ZBA_INSTRUCTIONS
+
+#if (defined CAN_USE_ZBB_INSTRUCTIONS)
+  answer |= 1u << ZBB;
+#endif  // def CAN_USE_ZBA_INSTRUCTIONS
+
+#if (defined CAN_USE_ZBS_INSTRUCTIONS)
+  answer |= 1u << ZBS;
+#endif  // def CAN_USE_ZBA_INSTRUCTIONS
   return answer;
 }
 
@@ -183,7 +194,7 @@ MemOperand::MemOperand(Register rm, int32_t unit, int32_t multiplier,
   offset_ = unit * multiplier + offset_addend;
 }
 
-void Assembler::AllocateAndInstallRequestedHeapNumbers(Isolate* isolate) {
+void Assembler::AllocateAndInstallRequestedHeapNumbers(LocalIsolate* isolate) {
   DCHECK_IMPLIES(isolate == nullptr, heap_number_requests_.empty());
   for (auto& request : heap_number_requests_) {
     Handle<HeapObject> object =
@@ -224,7 +235,10 @@ Assembler::Assembler(const AssemblerOptions& options,
 void Assembler::AbortedCodeGeneration() { constpool_.Clear(); }
 Assembler::~Assembler() { CHECK(constpool_.IsEmpty()); }
 
-void Assembler::GetCode(Isolate* isolate, CodeDesc* desc,
+void Assembler::GetCode(Isolate* isolate, CodeDesc* desc) {
+  GetCode(isolate->main_thread_local_isolate(), desc);
+}
+void Assembler::GetCode(LocalIsolate* isolate, CodeDesc* desc,
                         SafepointTableBuilder* safepoint_table_builder,
                         int handler_table_offset) {
   // As a crutch to avoid having to add manual Align calls wherever we use a
@@ -313,7 +327,7 @@ int Assembler::target_at(int pos, bool is_internal) {
   DEBUG_PRINTF("target_at: %p (%d)\n\t",
                reinterpret_cast<Instr*>(buffer_start_ + pos), pos);
   Instr instr = instruction->InstructionBits();
-  disassembleInstr(instruction->InstructionBits());
+  disassembleInstr(buffer_start_ + pos);
 
   switch (instruction->InstructionOpcodeType()) {
     case BRANCH: {
@@ -487,13 +501,13 @@ bool Assembler::MustUseReg(RelocInfo::Mode rmode) {
   return !RelocInfo::IsNoInfo(rmode);
 }
 
-void Assembler::disassembleInstr(Instr instr) {
+void Assembler::disassembleInstr(uint8_t* pc) {
   if (!v8_flags.riscv_debug) return;
   disasm::NameConverter converter;
   disasm::Disassembler disasm(converter);
   base::EmbeddedVector<char, 128> disasm_buffer;
 
-  disasm.InstructionDecode(disasm_buffer, reinterpret_cast<uint8_t*>(&instr));
+  disasm.InstructionDecode(disasm_buffer, pc);
   DEBUG_PRINTF("%s\n", disasm_buffer.begin());
 }
 
@@ -573,7 +587,11 @@ void Assembler::target_at_put(int pos, int target_pos, bool is_internal,
           pos, target_pos + (InstructionStream::kHeaderSize - kHeapObjectTag));
     } break;
   }
-  disassembleInstr(instr);
+
+  disassembleInstr(buffer_start_ + pos);
+  if (instruction->InstructionOpcodeType() == AUIPC) {
+    disassembleInstr(buffer_start_ + pos + 4);
+  }
 }
 
 void Assembler::print(const Label* L) {
@@ -1321,18 +1339,23 @@ void Assembler::GrowBuffer() {
 
 void Assembler::db(uint8_t data) {
   if (!is_buffer_growth_blocked()) CheckBuffer();
-  DEBUG_PRINTF("%p(%x): constant 0x%x\n", pc_, pc_offset(), data);
+  DEBUG_PRINTF("%p(%d): constant 0x%x\n", pc_, pc_offset(), data);
   EmitHelper(data);
 }
 
 void Assembler::dd(uint32_t data) {
   if (!is_buffer_growth_blocked()) CheckBuffer();
-  DEBUG_PRINTF("%p(%x): constant 0x%x\n", pc_, pc_offset(), data);
+  DEBUG_PRINTF("%p(%d): constant 0x%x\n", pc_, pc_offset(), data);
   EmitHelper(data);
 }
 
 void Assembler::dq(uint64_t data) {
   if (!is_buffer_growth_blocked()) CheckBuffer();
+#if V8_TARGET_ARCH_RISCV64
+  DEBUG_PRINTF("%p(%d): constant 0x%lx\n", pc_, pc_offset(), data);
+#elif V8_TARGET_ARCH_RISCV32
+  DEBUG_PRINTF("%p(%d): constant 0x%llx\n", pc_, pc_offset(), data);
+#endif
   EmitHelper(data);
 }
 
@@ -1673,9 +1696,9 @@ void Assembler::emit(Instr x) {
   if (!is_buffer_growth_blocked()) {
     CheckBuffer();
   }
-  DEBUG_PRINTF("%p(%x): ", pc_, pc_offset());
-  disassembleInstr(x);
+  DEBUG_PRINTF("%p(%d): ", pc_, pc_offset());
   EmitHelper(x);
+  disassembleInstr(pc_ - sizeof(x));
   CheckTrampolinePoolQuick();
 }
 
@@ -1683,13 +1706,14 @@ void Assembler::emit(ShortInstr x) {
   if (!is_buffer_growth_blocked()) {
     CheckBuffer();
   }
-  DEBUG_PRINTF("%p(%x): ", pc_, pc_offset());
-  disassembleInstr(x);
+  DEBUG_PRINTF("%p(%d): ", pc_, pc_offset());
   EmitHelper(x);
+  disassembleInstr(pc_ - sizeof(x));
   CheckTrampolinePoolQuick();
 }
 
 void Assembler::emit(uint64_t data) {
+  DEBUG_PRINTF("%p(%d): ", pc_, pc_offset());
   if (!is_buffer_growth_blocked()) CheckBuffer();
   EmitHelper(data);
 }
@@ -2112,6 +2136,5 @@ int Assembler::GeneralLiCount(int64_t imm, bool is_get_temp_reg) {
   return count;
 }
 #endif
-
 }  // namespace internal
 }  // namespace v8

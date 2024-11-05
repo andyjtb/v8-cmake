@@ -10,6 +10,7 @@
 #include "src/compiler/js-graph.h"
 #include "src/compiler/js-heap-broker.h"
 #include "src/compiler/node-matchers.h"
+#include "src/compiler/operator-properties.h"
 #include "src/compiler/operator.h"
 #include "src/handles/handles-inl.h"
 #include "src/objects/objects-inl.h"
@@ -90,7 +91,8 @@ std::ostream& operator<<(std::ostream& os, ConstructParameters const& p) {
 ConstructParameters const& ConstructParametersOf(Operator const* op) {
   DCHECK(op->opcode() == IrOpcode::kJSConstruct ||
          op->opcode() == IrOpcode::kJSConstructWithArrayLike ||
-         op->opcode() == IrOpcode::kJSConstructWithSpread);
+         op->opcode() == IrOpcode::kJSConstructWithSpread ||
+         op->opcode() == IrOpcode::kJSConstructForwardAllArgs);
   return OpParameter<ConstructParameters>(op);
 }
 
@@ -1004,6 +1006,20 @@ const Operator* JSOperatorBuilder::ConstructWithSpread(
       parameters);                                                // parameter
 }
 
+const Operator* JSOperatorBuilder::ConstructForwardAllArgs(
+    CallFrequency const& frequency, FeedbackSource const& feedback) {
+  // Use 0 as a fake arity. This operator will be reduced away to either a call
+  // to Builtin::kConstructForwardAllArgs or an ordinary
+  // JSConstruct.
+  ConstructParameters parameters(JSConstructForwardAllArgsNode::ArityForArgc(0),
+                                 frequency, feedback);
+  return zone()->New<Operator1<ConstructParameters>>(                 // --
+      IrOpcode::kJSConstructForwardAllArgs, Operator::kNoProperties,  // opcode
+      "JSConstructForwardAllArgs",                                    // name
+      parameters.arity(), 1, 1, 1, 1, 2,                              // counts
+      parameters);  // parameter
+}
+
 const Operator* JSOperatorBuilder::LoadNamed(NameRef name,
                                              const FeedbackSource& feedback) {
   static constexpr int kObject = 1;
@@ -1401,9 +1417,20 @@ const Operator* JSOperatorBuilder::CloneObject(FeedbackSource const& feedback,
 }
 
 const Operator* JSOperatorBuilder::StackCheck(StackCheckKind kind) {
+  Operator::Properties properties;
+  switch (kind) {
+    case StackCheckKind::kJSFunctionEntry:
+    case StackCheckKind::kCodeStubAssembler:
+    case StackCheckKind::kWasm:
+      properties = Operator::kNoProperties;
+      break;
+    case StackCheckKind::kJSIterationBody:
+      properties = Operator::kNoWrite;
+      break;
+  }
   return zone()->New<Operator1<StackCheckKind>>(  // --
       IrOpcode::kJSStackCheck,                    // opcode
-      Operator::kNoProperties,                    // properties
+      properties,                                 // properties
       "JSStackCheck",                             // name
       0, 1, 1, 0, 1, 2,                           // counts
       kind);                                      // parameter

@@ -33,13 +33,13 @@ Handle<WasmInstanceObject> CompileModule(Zone* zone, Isolate* isolate,
   return maybe_instance.ToHandleChecked();
 }
 
-bool IsGeneric(Code wrapper) {
-  return wrapper.is_builtin() &&
-         wrapper.builtin_id() == Builtin::kJSToWasmWrapper;
+bool IsGeneric(Tagged<Code> wrapper) {
+  return wrapper->is_builtin() &&
+         wrapper->builtin_id() == Builtin::kJSToWasmWrapper;
 }
 
-bool IsSpecific(Code wrapper) {
-  return wrapper.kind() == CodeKind::JS_TO_WASM_FUNCTION;
+bool IsSpecific(Tagged<Code> wrapper) {
+  return wrapper->kind() == CodeKind::JS_TO_WASM_FUNCTION;
 }
 
 Handle<Object> SmiHandle(Isolate* isolate, int value) {
@@ -52,7 +52,7 @@ void SmiCall(Isolate* isolate, Handle<WasmExportedFunction> exported_function,
   Handle<Object> result =
       Execution::Call(isolate, exported_function, receiver, argc, argv)
           .ToHandleChecked();
-  CHECK(result->IsSmi() && Smi::ToInt(*result) == expected_result);
+  CHECK(IsSmi(*result) && Smi::ToInt(*result) == expected_result);
 }
 
 void Cleanup() {
@@ -98,7 +98,7 @@ TEST(WrapperBudget) {
         testing::GetExportedFunction(isolate, instance, "main")
             .ToHandleChecked();
     Handle<WasmExportedFunctionData> main_function_data =
-        handle(main_export->shared().wasm_exported_function_data(), isolate);
+        handle(main_export->shared()->wasm_exported_function_data(), isolate);
 
     // Check that the generic-wrapper budget has initially a value of
     // kGenericWrapperBudget.
@@ -147,7 +147,7 @@ TEST(WrapperReplacement) {
         testing::GetExportedFunction(isolate, instance, "main")
             .ToHandleChecked();
     Handle<WasmExportedFunctionData> main_function_data =
-        handle(main_export->shared().wasm_exported_function_data(), isolate);
+        handle(main_export->shared()->wasm_exported_function_data(), isolate);
 
     // Check that the generic-wrapper budget has initially a value of
     // kGenericWrapperBudget.
@@ -165,7 +165,8 @@ TEST(WrapperReplacement) {
     Handle<Code> wrapper_before_call;
     for (int i = remaining_budget; i > 0; --i) {
       // Verify that the wrapper to be used is the generic one.
-      wrapper_before_call = handle(main_function_data->wrapper_code(), isolate);
+      wrapper_before_call =
+          handle(main_function_data->wrapper_code(isolate), isolate);
       CHECK(IsGeneric(*wrapper_before_call));
       // Call the function.
       Handle<Object> params[1] = {SmiHandle(isolate, i)};
@@ -175,13 +176,16 @@ TEST(WrapperReplacement) {
     }
 
     // Get the wrapper-code object after the wrapper replacement.
-    Code wrapper_after_call = main_function_data->wrapper_code();
+    Tagged<Code> wrapper_after_call = main_function_data->wrapper_code(isolate);
 
     // Verify that the budget has been exhausted.
     CHECK_EQ(main_function_data->wrapper_budget(), 0);
     // Verify that the wrapper-code object has changed and the wrapper is now a
     // specific one.
-    CHECK_NE(wrapper_after_call, *wrapper_before_call);
+    // TODO(saelo): here we have to use full pointer comparison while not all
+    // Code objects have been moved into trusted space.
+    static_assert(!kAllCodeObjectsLiveInTrustedSpace);
+    CHECK(!wrapper_after_call.SafeEquals(*wrapper_before_call));
     CHECK(IsSpecific(wrapper_after_call));
   }
   Cleanup();
@@ -238,11 +242,11 @@ TEST(EagerWrapperReplacement) {
 
     // Get the function data for all exported functions.
     Handle<WasmExportedFunctionData> add_function_data =
-        handle(add_export->shared().wasm_exported_function_data(), isolate);
+        handle(add_export->shared()->wasm_exported_function_data(), isolate);
     Handle<WasmExportedFunctionData> mult_function_data =
-        handle(mult_export->shared().wasm_exported_function_data(), isolate);
+        handle(mult_export->shared()->wasm_exported_function_data(), isolate);
     Handle<WasmExportedFunctionData> id_function_data =
-        handle(id_export->shared().wasm_exported_function_data(), isolate);
+        handle(id_export->shared()->wasm_exported_function_data(), isolate);
 
     // Set the remaining generic-wrapper budget for add to 1,
     // so that the next call to it will cause the function to tier up.
@@ -254,9 +258,9 @@ TEST(EagerWrapperReplacement) {
     CHECK_EQ(id_function_data->wrapper_budget(), kGenericWrapperBudget);
 
     // Verify that all functions are set to use the generic wrapper.
-    CHECK(IsGeneric(add_function_data->wrapper_code()));
-    CHECK(IsGeneric(mult_function_data->wrapper_code()));
-    CHECK(IsGeneric(id_function_data->wrapper_code()));
+    CHECK(IsGeneric(add_function_data->wrapper_code(isolate)));
+    CHECK(IsGeneric(mult_function_data->wrapper_code(isolate)));
+    CHECK(IsGeneric(id_function_data->wrapper_code(isolate)));
 
     // Call the add function to trigger the tier up.
     {
@@ -269,9 +273,9 @@ TEST(EagerWrapperReplacement) {
       CHECK_EQ(id_function_data->wrapper_budget(), kGenericWrapperBudget);
       // Verify that the tier-up of the add function replaced the wrapper
       // for both the add and the mult functions, but not the id function.
-      CHECK(IsSpecific(add_function_data->wrapper_code()));
-      CHECK(IsSpecific(mult_function_data->wrapper_code()));
-      CHECK(IsGeneric(id_function_data->wrapper_code()));
+      CHECK(IsSpecific(add_function_data->wrapper_code(isolate)));
+      CHECK(IsSpecific(mult_function_data->wrapper_code(isolate)));
+      CHECK(IsGeneric(id_function_data->wrapper_code(isolate)));
     }
 
     // Call the mult function to verify that the compiled wrapper is used.
@@ -335,7 +339,9 @@ TEST(WrapperReplacement_IndirectExport) {
 
     // Get the exported table.
     Handle<WasmTableObject> table(
-        WasmTableObject::cast(instance->tables().get(table_index)), isolate);
+        WasmTableObject::cast(
+            instance->trusted_data(isolate)->tables()->get(table_index)),
+        isolate);
     // Get the Wasm function through the exported table.
     Handle<Object> function =
         WasmTableObject::Get(isolate, table, function_index);
@@ -345,12 +351,12 @@ TEST(WrapperReplacement_IndirectExport) {
                 Handle<WasmInternalFunction>::cast(function)));
     // Get the function data.
     Handle<WasmExportedFunctionData> indirect_function_data(
-        indirect_function->shared().wasm_exported_function_data(), isolate);
+        indirect_function->shared()->wasm_exported_function_data(), isolate);
 
     // Verify that the generic-wrapper budget has initially a value of
     // kGenericWrapperBudget and the wrapper to be used for calls to the
     // indirect function is the generic one.
-    CHECK(IsGeneric(indirect_function_data->wrapper_code()));
+    CHECK(IsGeneric(indirect_function_data->wrapper_code(isolate)));
     CHECK(indirect_function_data->wrapper_budget() == kGenericWrapperBudget);
 
     // Set the remaining generic-wrapper budget for the indirect function to 1,
@@ -364,7 +370,7 @@ TEST(WrapperReplacement_IndirectExport) {
     // Verify that the budget is now exhausted and the generic wrapper has been
     // replaced by a specific one.
     CHECK_EQ(indirect_function_data->wrapper_budget(), 0);
-    CHECK(IsSpecific(indirect_function_data->wrapper_code()));
+    CHECK(IsSpecific(indirect_function_data->wrapper_code(isolate)));
   }
   Cleanup();
 }

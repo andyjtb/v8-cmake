@@ -13,6 +13,7 @@
 #include "include/v8-proxy.h"
 #include "include/v8-typed-array.h"
 #include "include/v8-wasm.h"
+#include "src/base/contextual.h"
 #include "src/execution/isolate.h"
 #include "src/objects/bigint.h"
 #include "src/objects/contexts.h"
@@ -56,10 +57,11 @@ class Consts {
 };
 
 template <typename T>
-inline T ToCData(v8::internal::Object obj);
+inline T ToCData(v8::internal::Tagged<v8::internal::Object> obj);
 
 template <>
-inline v8::internal::Address ToCData(v8::internal::Object obj);
+inline v8::internal::Address ToCData(
+    v8::internal::Tagged<v8::internal::Object> obj);
 
 template <typename T>
 inline v8::internal::Handle<v8::internal::Object> FromCData(
@@ -189,29 +191,41 @@ class RegisteredExtension {
 
 class Utils {
  public:
-  static inline bool ApiCheck(bool condition, const char* location,
-                              const char* message) {
-    if (!condition) Utils::ReportApiFailure(location, message);
+  static V8_INLINE bool ApiCheck(bool condition, const char* location,
+                                 const char* message) {
+    if (V8_UNLIKELY(!condition)) {
+      Utils::ReportApiFailure(location, message);
+    }
     return condition;
   }
   static void ReportOOMFailure(v8::internal::Isolate* isolate,
                                const char* location, const OOMDetails& details);
 
-#define DECLARE_TO_LOCAL(Name, From, To) \
-  static inline Local<v8::To> Name(      \
-      v8::internal::Handle<v8::internal::From> obj);
+#define DECLARE_TO_LOCAL(Name, From, To)                  \
+  static inline Local<v8::To> Name(                       \
+      v8::internal::Handle<v8::internal::From> obj);      \
+  static inline Local<v8::To> Name(                       \
+      v8::internal::DirectHandle<v8::internal::From> obj, \
+      v8::internal::Isolate* isolate);
 
   TO_LOCAL_LIST(DECLARE_TO_LOCAL)
 
 #define DECLARE_TO_LOCAL_TYPED_ARRAY(Type, typeName, TYPE, ctype) \
   static inline Local<v8::Type##Array> ToLocal##Type##Array(      \
-      v8::internal::Handle<v8::internal::JSTypedArray> obj);
+      v8::internal::Handle<v8::internal::JSTypedArray> obj);      \
+  static inline Local<v8::Type##Array> ToLocal##Type##Array(      \
+      v8::internal::DirectHandle<v8::internal::JSTypedArray> obj, \
+      v8::internal::Isolate* isolate);
 
   TYPED_ARRAYS(DECLARE_TO_LOCAL_TYPED_ARRAY)
 
-#define DECLARE_OPEN_HANDLE(From, To)                              \
-  static inline v8::internal::Handle<v8::internal::To> OpenHandle( \
-      const From* that, bool allow_empty_handle = false);
+#define DECLARE_OPEN_HANDLE(From, To)                                          \
+  static inline v8::internal::Handle<v8::internal::To> OpenHandle(             \
+      const From* that, bool allow_empty_handle = false);                      \
+  static inline v8::internal::DirectHandle<v8::internal::To> OpenDirectHandle( \
+      const From* that, bool allow_empty_handle = false);                      \
+  static inline v8::internal::IndirectHandle<v8::internal::To>                 \
+  OpenIndirectHandle(const From* that, bool allow_empty_handle = false);
 
   OPEN_HANDLE_LIST(DECLARE_OPEN_HANDLE)
 
@@ -221,6 +235,10 @@ class Utils {
 
   template <class From, class To>
   static inline Local<To> Convert(v8::internal::Handle<From> obj);
+
+  template <class From, class To>
+  static inline Local<To> Convert(v8::internal::DirectHandle<From> obj,
+                                  v8::internal::Isolate* isolate);
 
   template <class T>
   static inline v8::internal::Handle<v8::internal::Object> OpenPersistent(
@@ -239,8 +257,15 @@ class Utils {
     return OpenHandle(*handle);
   }
 
+  template <class From, class To>
+  static inline v8::internal::DirectHandle<To> OpenDirectHandle(
+      v8::Local<From> handle) {
+    return OpenDirectHandle(*handle);
+  }
+
  private:
-  static void ReportApiFailure(const char* location, const char* message);
+  V8_NOINLINE V8_PRESERVE_MOST static void ReportApiFailure(
+      const char* location, const char* message);
 };
 
 template <class T>
@@ -252,6 +277,13 @@ template <class T>
 inline v8::Local<T> ToApiHandle(
     v8::internal::Handle<v8::internal::Object> obj) {
   return Utils::Convert<v8::internal::Object, T>(obj);
+}
+
+template <class T>
+inline v8::Local<T> ToApiHandle(
+    v8::internal::DirectHandle<v8::internal::Object> obj,
+    v8::internal::Isolate* isolate) {
+  return Utils::Convert<v8::internal::Object, T>(obj, isolate);
 }
 
 template <class T>
@@ -320,20 +352,17 @@ class HandleScopeImplementer {
   inline internal::Address* GetSpareOrNewBlock();
   inline void DeleteExtensions(internal::Address* prev_limit);
 
-  inline void EnterContext(NativeContext context);
+  inline void EnterContext(Tagged<NativeContext> context);
   inline void LeaveContext();
-  inline bool LastEnteredContextWas(NativeContext context);
+  inline bool LastEnteredContextWas(Tagged<NativeContext> context);
   inline size_t EnteredContextCount() const { return entered_contexts_.size(); }
-
-  inline void EnterMicrotaskContext(NativeContext context);
 
   // Returns the last entered context or an empty handle if no
   // contexts have been entered.
   inline Handle<NativeContext> LastEnteredContext();
-  inline Handle<NativeContext> LastEnteredOrMicrotaskContext();
 
-  inline void SaveContext(Context context);
-  inline Context RestoreContext();
+  inline void SaveContext(Tagged<Context> context);
+  inline Tagged<Context> RestoreContext();
   inline bool HasSavedContexts();
 
   inline DetachableVector<Address*>* blocks() { return &blocks_; }
@@ -346,13 +375,11 @@ class HandleScopeImplementer {
   }
 
   static const size_t kEnteredContextsOffset;
-  static const size_t kIsMicrotaskContextOffset;
 
  private:
   void ResetAfterArchive() {
     blocks_.detach();
     entered_contexts_.detach();
-    is_microtask_context_.detach();
     saved_contexts_.detach();
     spare_ = nullptr;
     last_handle_before_deferred_block_ = nullptr;
@@ -361,12 +388,10 @@ class HandleScopeImplementer {
   void Free() {
     DCHECK(blocks_.empty());
     DCHECK(entered_contexts_.empty());
-    DCHECK(is_microtask_context_.empty());
     DCHECK(saved_contexts_.empty());
 
     blocks_.free();
     entered_contexts_.free();
-    is_microtask_context_.free();
     saved_contexts_.free();
     if (spare_ != nullptr) {
       DeleteArray(spare_);
@@ -382,15 +407,10 @@ class HandleScopeImplementer {
   DetachableVector<Address*> blocks_;
 
   // Used as a stack to keep track of entered contexts.
-  // If |i|th item of |entered_contexts_| is added by EnterMicrotaskContext,
-  // `is_microtask_context_[i]` is 1.
-  // TODO(tzik): Remove |is_microtask_context_| after the deprecated
-  // v8::Isolate::GetEnteredContext() is removed.
-  DetachableVector<NativeContext> entered_contexts_;
-  DetachableVector<int8_t> is_microtask_context_;
+  DetachableVector<Tagged<NativeContext>> entered_contexts_;
 
   // Used as a stack to keep track of saved contexts.
-  DetachableVector<Context> saved_contexts_;
+  DetachableVector<Tagged<Context>> saved_contexts_;
   Address* spare_;
   Address* last_handle_before_deferred_block_;
   // This is only used for threading support.
@@ -406,12 +426,12 @@ class HandleScopeImplementer {
 
 const int kHandleBlockSize = v8::internal::KB - 2;  // fit in one page
 
-void HandleScopeImplementer::SaveContext(Context context) {
+void HandleScopeImplementer::SaveContext(Tagged<Context> context) {
   saved_contexts_.push_back(context);
 }
 
-Context HandleScopeImplementer::RestoreContext() {
-  Context last_context = saved_contexts_.back();
+Tagged<Context> HandleScopeImplementer::RestoreContext() {
+  Tagged<Context> last_context = saved_contexts_.back();
   saved_contexts_.pop_back();
   return last_context;
 }
@@ -422,13 +442,11 @@ bool HandleScopeImplementer::HasSavedContexts() {
 
 void HandleScopeImplementer::LeaveContext() {
   DCHECK(!entered_contexts_.empty());
-  DCHECK_EQ(entered_contexts_.capacity(), is_microtask_context_.capacity());
-  DCHECK_EQ(entered_contexts_.size(), is_microtask_context_.size());
   entered_contexts_.pop_back();
-  is_microtask_context_.pop_back();
 }
 
-bool HandleScopeImplementer::LastEnteredContextWas(NativeContext context) {
+bool HandleScopeImplementer::LastEnteredContextWas(
+    Tagged<NativeContext> context) {
   return !entered_contexts_.empty() && entered_contexts_.back() == context;
 }
 
@@ -490,9 +508,7 @@ void InvokeAccessorGetterCallback(
 // IsolateData::api_callback_thunk_argument slot.
 void InvokeFunctionCallbackGeneric(
     const v8::FunctionCallbackInfo<v8::Value>& info);
-void InvokeFunctionCallbackNoSideEffects(
-    const v8::FunctionCallbackInfo<v8::Value>& info);
-void InvokeFunctionCallbackWithSideEffects(
+void InvokeFunctionCallbackOptimized(
     const v8::FunctionCallbackInfo<v8::Value>& info);
 
 void InvokeFinalizationRegistryCleanupFromTask(
@@ -511,6 +527,8 @@ bool ValidateCallbackInfo(const FunctionCallbackInfo<T>& info);
 template <typename T>
 EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
 bool ValidateCallbackInfo(const PropertyCallbackInfo<T>& info);
+
+DECLARE_CONTEXTUAL_VARIABLE_WITH_DEFAULT(StackAllocatedCheck, const bool, true);
 
 }  // namespace internal
 }  // namespace v8

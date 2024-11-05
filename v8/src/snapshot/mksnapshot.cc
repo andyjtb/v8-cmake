@@ -154,7 +154,7 @@ char* GetExtraCode(char* filename, const char* description) {
   return chars;
 }
 
-v8::StartupData CreateSnapshotDataBlob(v8::Isolate* isolate,
+v8::StartupData CreateSnapshotDataBlob(i::Isolate* isolate,
                                        const char* embedded_source) {
   v8::base::ElapsedTimer timer;
   timer.Start();
@@ -279,12 +279,12 @@ int main(int argc, char** argv) {
                          i::kMaxPCRelativeCodeRangeInMB);
       v8::ResourceConstraints constraints;
       constraints.set_code_range_size_in_bytes(code_range_size_mb * i::MB);
-      i_isolate->heap()->ConfigureHeap(constraints);
+      i_isolate->heap()->ConfigureHeap(constraints, nullptr);
       // The isolate contains data from builtin compilation that needs
       // to be written out if builtins are embedded.
       i_isolate->RegisterEmbeddedFileWriter(&embedded_writer);
 
-      blob = CreateSnapshotDataBlob(isolate, embed_script.get());
+      blob = CreateSnapshotDataBlob(i_isolate, embed_script.get());
 
       WriteEmbeddedFile(&embedded_writer);
 

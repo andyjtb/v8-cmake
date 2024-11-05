@@ -32,7 +32,7 @@ class ZoneBuffer : public ZoneObject {
 
   static constexpr size_t kInitialSize = 1024;
   explicit ZoneBuffer(Zone* zone, size_t initial = kInitialSize)
-      : zone_(zone), buffer_(zone->NewArray<uint8_t, Buffer>(initial)) {
+      : zone_(zone), buffer_(zone->AllocateArray<uint8_t, Buffer>(initial)) {
     pos_ = buffer_;
     end_ = buffer_ + initial;
   }
@@ -138,7 +138,7 @@ class ZoneBuffer : public ZoneObject {
   void EnsureSpace(size_t size) {
     if ((pos_ + size) > end_) {
       size_t new_size = size + (end_ - buffer_) * 2;
-      uint8_t* new_buffer = zone_->NewArray<uint8_t, Buffer>(new_size);
+      uint8_t* new_buffer = zone_->AllocateArray<uint8_t, Buffer>(new_size);
       memcpy(new_buffer, buffer_, (pos_ - buffer_));
       pos_ = new_buffer + (pos_ - buffer_);
       buffer_ = new_buffer;
@@ -342,7 +342,7 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
   // Does not deduplicate function signatures.
   uint32_t ForceAddSignature(const FunctionSig* sig, bool is_final,
                              uint32_t supertype = kNoSuperType);
-  uint32_t AddException(const FunctionSig* type);
+  uint32_t AddTag(const FunctionSig* type);
   uint32_t AddStructType(StructType* type, bool is_final,
                          uint32_t supertype = kNoSuperType);
   uint32_t AddArrayType(ArrayType* type, bool is_final,
@@ -418,7 +418,7 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
   uint32_t GetSuperType(uint32_t index) { return types_[index].supertype; }
 
   WasmFunctionBuilder* GetFunction(uint32_t index) { return functions_[index]; }
-  int NumExceptions() { return static_cast<int>(exceptions_.size()); }
+  int NumTags() { return static_cast<int>(tags_.size()); }
 
   int NumTypes() { return static_cast<int>(types_.size()); }
 
@@ -428,8 +428,8 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
 
   int NumDataSegments() { return static_cast<int>(data_segments_.size()); }
 
-  const FunctionSig* GetExceptionType(int index) {
-    return types_[exceptions_[index]].function_sig;
+  const FunctionSig* GetTagType(int index) {
+    return types_[tags_[index]].function_sig;
   }
 
  private:
@@ -483,7 +483,7 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
   ZoneVector<WasmDataSegment> data_segments_;
   ZoneVector<WasmElemSegment> element_segments_;
   ZoneVector<WasmGlobal> globals_;
-  ZoneVector<int> exceptions_;
+  ZoneVector<int> tags_;
   ZoneUnorderedMap<FunctionSig, uint32_t> signature_map_;
   int current_recursive_group_start_;
   // first index -> size

@@ -124,7 +124,7 @@ class WithHeapInternals : public TMixin, HeapInternalsBase {
     InvokeMajorGC();
     heap()->EnsureSweepingCompleted(
         Heap::SweepingForcedFinalizationMode::kV8Only);
-    heap()->old_space()->FreeLinearAllocationArea();
+    heap()->FreeMainThreadLinearAllocationAreas();
     for (Page* page : *heap()->old_space()) {
       page->MarkNeverAllocateForTesting();
     }
@@ -153,7 +153,7 @@ bool InYoungGeneration(v8::Isolate* isolate, const GlobalOrPersistent& global) {
   return Heap::InYoungGeneration(*v8::Utils::OpenHandle(*tmp));
 }
 
-bool IsNewObjectInCorrectGeneration(HeapObject object);
+bool IsNewObjectInCorrectGeneration(Tagged<HeapObject> object);
 
 template <typename GlobalOrPersistent>
 bool IsNewObjectInCorrectGeneration(v8::Isolate* isolate,
@@ -176,12 +176,25 @@ class V8_NODISCARD ManualGCScope final {
   Isolate* const isolate_;
   const bool flag_concurrent_marking_;
   const bool flag_concurrent_sweeping_;
-  const bool flag_concurrent_minor_mc_marking_;
+  const bool flag_concurrent_minor_ms_marking_;
   const bool flag_stress_concurrent_allocation_;
   const bool flag_stress_incremental_marking_;
   const bool flag_parallel_marking_;
   const bool flag_detect_ineffective_gcs_near_heap_limit_;
   const bool flag_cppheap_concurrent_marking_;
+};
+
+// DisableHandleChecksForMockingScope disables the checks for v8::Local and
+// internal::DirectHandle, so that such handles can be allocated off-stack.
+// This is required for mocking functions that take such handles as parameters
+// and/or return them as results. For correctness (with direct handles), when
+// this scope is used, it is important to ensure that the objects stored in
+// handles used for mocking are retained by other means, so that they will not
+// be reclaimed by a garbage collection.
+class V8_NODISCARD DisableHandleChecksForMockingScope final
+    : public StackAllocatedCheck::Scope {
+ public:
+  DisableHandleChecksForMockingScope() : StackAllocatedCheck::Scope(false) {}
 };
 
 }  // namespace internal

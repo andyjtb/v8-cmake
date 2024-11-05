@@ -390,16 +390,14 @@ void PrintSingleDeoptFrame(
         return;
       }
       os << " : {";
-      bool first = true;
+      os << "<closure>:"
+         << PrintNodeLabel(graph_labeller, frame.as_interpreted().closure())
+         << ":" << current_input_location->operand();
+      current_input_location++;
       frame.as_interpreted().frame_state()->ForEachValue(
           frame.as_interpreted().unit(),
           [&](ValueNode* node, interpreter::Register reg) {
-            if (first) {
-              first = false;
-            } else {
-              os << ", ";
-            }
-            os << reg.ToString() << ":";
+            os << ", " << reg.ToString() << ":";
             if (lazy_deopt_info_if_top_frame &&
                 lazy_deopt_info_if_top_frame->IsResultRegister(reg)) {
               os << "<result>";
@@ -412,32 +410,15 @@ void PrintSingleDeoptFrame(
       os << "}";
       break;
     }
-    case DeoptFrame::FrameType::kConstructStubFrame: {
-      if (frame.as_construct_stub().bytecode_position() ==
-          BytecodeOffset::ConstructStubCreate()) {
-        os << "@ConstructStubCreate";
-      } else {
-        os << "@ConstructStubInvoke";
-      }
+    case DeoptFrame::FrameType::kConstructInvokeStubFrame: {
+      os << "@ConstructInvokeStub";
       if (!v8_flags.print_maglev_deopt_verbose) return;
       os << " : {";
-      auto arguments_without_receiver =
-          frame.as_construct_stub().arguments_without_receiver();
       os << "<this>:"
          << PrintNodeLabel(graph_labeller, frame.as_construct_stub().receiver())
          << ":" << current_input_location->operand();
       current_input_location++;
-      if (arguments_without_receiver.size() > 0) {
-        os << ", ";
-      }
-      for (size_t i = 0; i < arguments_without_receiver.size(); i++) {
-        os << "a" << i << ":"
-           << PrintNodeLabel(graph_labeller, arguments_without_receiver[i])
-           << ":" << current_input_location->operand();
-        current_input_location++;
-        os << ", ";
-      }
-      os << "<context>:"
+      os << ", <context>:"
          << PrintNodeLabel(graph_labeller, frame.as_construct_stub().context())
          << ":" << current_input_location->operand();
       current_input_location++;
@@ -578,11 +559,11 @@ void PrintExceptionHandlerPoint(std::ostream& os,
   BasicBlock* block = info->catch_block.block_ptr();
   DCHECK(block->is_exception_handler_block());
 
-  Phi* first_phi = block->phis()->first();
-  if (first_phi == nullptr) {
-    // No phis in the block.
+  if (!block->has_phi()) {
     return;
   }
+  Phi* first_phi = block->phis()->first();
+  CHECK_NOT_NULL(first_phi);
   int handler_offset = first_phi->merge_state()->merge_offset();
 
   // The exception handler liveness should be a subset of lazy_deopt_info one.
@@ -596,7 +577,7 @@ void PrintExceptionHandlerPoint(std::ostream& os,
       break;
     case DeoptFrame::FrameType::kInlinedArgumentsFrame:
       UNREACHABLE();
-    case DeoptFrame::FrameType::kConstructStubFrame:
+    case DeoptFrame::FrameType::kConstructInvokeStubFrame:
     case DeoptFrame::FrameType::kBuiltinContinuationFrame:
       lazy_frame = &deopt_info->top_frame().parent()->as_interpreted();
       break;
@@ -653,7 +634,7 @@ void MaybePrintProvenance(std::ostream& os, std::vector<BasicBlock*> targets,
 
   // Print function every time the compilation unit changes.
   bool needs_function_print = provenance.unit != existing_provenance.unit;
-  Script script;
+  Tagged<Script> script;
   Script::PositionInfo position_info;
   bool has_position_info = false;
 
@@ -664,9 +645,9 @@ void MaybePrintProvenance(std::ostream& os, std::vector<BasicBlock*> targets,
        provenance.unit != existing_provenance.unit)) {
     script = Script::cast(
         provenance.unit->shared_function_info().object()->script());
-    has_position_info =
-        script.GetPositionInfo(provenance.position.ScriptOffset(),
-                               &position_info, Script::OffsetFlag::kWithOffset);
+    has_position_info = script->GetPositionInfo(
+        provenance.position.ScriptOffset(), &position_info,
+        Script::OffsetFlag::kWithOffset);
     needs_function_print = true;
   }
 
@@ -681,7 +662,7 @@ void MaybePrintProvenance(std::ostream& os, std::vector<BasicBlock*> targets,
       os << "\033[1;34m";
     }
     os << *provenance.unit->shared_function_info().object() << " ("
-       << script.GetNameOrSourceURL();
+       << script->GetNameOrSourceURL();
     if (has_position_info) {
       os << ":" << position_info.line << ":" << position_info.column;
     } else if (provenance.position.IsKnown()) {
@@ -738,7 +719,7 @@ ProcessResult MaglevPrintingVisitor::Process(Phi* phi,
     case ValueRepresentation::kHoleyFloat64:
       os_ << "ʰᶠ";
       break;
-    case ValueRepresentation::kWord64:
+    case ValueRepresentation::kIntPtr:
       UNREACHABLE();
   }
   if (phi->input_count() == 0) {
@@ -765,6 +746,9 @@ ProcessResult MaglevPrintingVisitor::Process(Phi* phi,
   if (phi->has_valid_live_range()) {
     os_ << ", live range: [" << phi->live_range().start << "-"
         << phi->live_range().end << "]";
+  }
+  if (!phi->has_id()) {
+    os_ << ", " << phi->use_count() << " uses";
   }
   os_ << "\n";
 
@@ -907,12 +891,13 @@ ProcessResult MaglevPrintingVisitor::Process(ControlNode* control_node,
           case ValueRepresentation::kHoleyFloat64:
             os_ << "ʰᶠ";
             break;
-          case ValueRepresentation::kWord64:
+          case ValueRepresentation::kIntPtr:
             UNREACHABLE();
         }
         os_ << " " << phi->owner().ToString() << " " << phi->result().operand()
             << "\n";
       }
+#ifdef V8_ENABLE_MAGLEV
       if (target->state()->register_state().is_initialized()) {
         PrintVerticalArrows(os_, targets_);
         PrintPadding(os_, graph_labeller_, max_node_id_, -1);
@@ -934,6 +919,7 @@ ProcessResult MaglevPrintingVisitor::Process(ControlNode* control_node,
         target->state()->register_state().ForEachDoubleRegister(
             print_register_merges);
       }
+#endif
     }
   }
 

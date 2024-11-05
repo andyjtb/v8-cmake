@@ -18,7 +18,7 @@ void LocalDeclEncoder::Prepend(Zone* zone, const uint8_t** start,
                                const uint8_t** end) const {
   size_t size = (*end - *start);
   uint8_t* buffer =
-      zone->NewArray<uint8_t, LocalDeclEncoderBuffer>(Size() + size);
+      zone->AllocateArray<uint8_t, LocalDeclEncoderBuffer>(Size() + size);
   size_t pos = Emit(buffer);
   if (size > 0) {
     memcpy(buffer + pos, *start, size);
@@ -52,7 +52,7 @@ uint32_t LocalDeclEncoder::AddLocals(uint32_t count, ValueType type) {
   uint32_t result =
       static_cast<uint32_t>(total + (sig ? sig->parameter_count() : 0));
   total += count;
-  if (local_decls.size() > 0 && local_decls.back().second == type) {
+  if (!local_decls.empty() && local_decls.back().second == type) {
     count += local_decls.back().first;
     local_decls.pop_back();
   }

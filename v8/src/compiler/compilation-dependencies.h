@@ -44,6 +44,12 @@ class V8_EXPORT_PRIVATE CompilationDependencies : public ZoneObject {
   // Record the assumption that {map} stays stable.
   void DependOnStableMap(MapRef map);
 
+  // Record the assumption that slack tracking for {map} doesn't change during
+  // compilation. This gives no guarantees about slack tracking changes after
+  // the compilation is finished (ie, it Validates the dependency, but doesn't
+  // Install anything).
+  void DependOnNoSlackTrackingChange(MapRef map);
+
   // Depend on the fact that accessing property |property_name| from
   // |receiver_map| yields the constant value |constant|, which is held by
   // |holder|. Therefore, must be invalidated if |property_name| is added to any
@@ -89,6 +95,8 @@ class V8_EXPORT_PRIVATE CompilationDependencies : public ZoneObject {
   bool DependOnPromiseSpeciesProtector();
   bool DependOnPromiseThenProtector();
   bool DependOnMegaDOMProtector();
+  bool DependOnNoProfilingProtector();
+  bool DependOnNoUndetectableObjectsProtector();
 
   // Record the assumption that {site}'s {ElementsKind} doesn't change.
   void DependOnElementsKind(AllocationSiteRef site);
@@ -103,8 +111,9 @@ class V8_EXPORT_PRIVATE CompilationDependencies : public ZoneObject {
   // Record the assumption that the {value} read from {holder} at {index} on the
   // background thread is the correct value for a given property.
   void DependOnOwnConstantDataProperty(JSObjectRef holder, MapRef map,
-                                       Representation representation,
                                        FieldIndex index, ObjectRef value);
+  void DependOnOwnConstantDoubleProperty(JSObjectRef holder, MapRef map,
+                                         FieldIndex index, Float64 value);
 
   // Record the assumption that the {value} read from {holder} at {index} on the
   // background thread is the correct value for a given dictionary property.

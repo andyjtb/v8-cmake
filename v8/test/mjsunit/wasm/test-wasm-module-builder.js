@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --expose-wasm --experimental-wasm-typed-funcref
+// Flags: --expose-wasm
 
 d8.file.execute('test/mjsunit/wasm/wasm-module-builder.js');
 
@@ -15,7 +15,7 @@ function instantiate(buffer, ffi) {
 (function BasicTest() {
   print(arguments.callee.name);
   let builder = new WasmModuleBuilder();
-  builder.addMemory(1, 2, false);
+  builder.addMemory(1, 2);
   builder.addFunction('foo', kSig_i_v)
       .addBody([kExprI32Const, 11])
       .exportAs('blarg');
@@ -114,7 +114,7 @@ function instantiate(buffer, ffi) {
 (function DataSegmentTest() {
   print(arguments.callee.name);
   let builder = new WasmModuleBuilder();
-  builder.addMemory(1, 1, false);
+  builder.addMemory(1, 1);
   builder.addFunction('load', kSig_i_i)
       .addBody([kExprLocalGet, 0, kExprI32LoadMem, 0, 0])
       .exportAs('load');
@@ -128,7 +128,7 @@ function instantiate(buffer, ffi) {
 (function BasicTestWithUint8Array() {
   print(arguments.callee.name);
   let builder = new WasmModuleBuilder();
-  builder.addMemory(1, 2, false);
+  builder.addMemory(1, 2);
   builder.addFunction('foo', kSig_i_v)
       .addBody([kExprI32Const, 17])
       .exportAs('blarg');

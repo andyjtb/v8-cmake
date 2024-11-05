@@ -24,6 +24,18 @@ constexpr auto CallInterfaceDescriptor::DefaultDoubleRegisterArray() {
   return registers;
 }
 
+constexpr auto CallInterfaceDescriptor::DefaultReturnRegisterArray() {
+  auto registers =
+      RegisterArray(kReturnRegister0, kReturnRegister1, kReturnRegister2);
+  return registers;
+}
+
+constexpr auto CallInterfaceDescriptor::DefaultReturnDoubleRegisterArray() {
+  // Padding to have as many double return registers as GP return registers.
+  auto registers = DoubleRegisterArray(kFPReturnRegister0, no_dreg, no_dreg);
+  return registers;
+}
+
 #if DEBUG
 template <typename DerivedDescriptor>
 void StaticCallInterfaceDescriptor<DerivedDescriptor>::
@@ -182,6 +194,14 @@ constexpr auto CallFunctionTemplateDescriptor::registers() {
 }
 
 // static
+constexpr auto CallFunctionTemplateGenericDescriptor::registers() {
+  // r4 : function template info
+  // r5 : number of arguments (on the stack)
+  // r6 : topmost script-having context
+  return RegisterArray(r4, r5, r6);
+}
+
+// static
 constexpr auto CallWithSpreadDescriptor::registers() {
   // r3 : number of arguments (on the stack)
   // r4 : the target to call
@@ -288,6 +308,11 @@ CallApiCallbackGenericDescriptor::ActualArgumentsCountRegister() {
   return r5;
 }
 // static
+constexpr Register
+CallApiCallbackGenericDescriptor::TopmostScriptHavingContextRegister() {
+  return r4;
+}
+// static
 constexpr Register CallApiCallbackGenericDescriptor::CallHandlerInfoRegister() {
   return r6;
 }
@@ -321,6 +346,12 @@ constexpr auto InterpreterPushArgsThenConstructDescriptor::registers() {
 }
 
 // static
+constexpr auto ConstructForwardAllArgsDescriptor::registers() {
+  return RegisterArray(r4,   // constructor to call
+                       r6);  // new target
+}
+
+// static
 constexpr auto ResumeGeneratorDescriptor::registers() {
   return RegisterArray(r3,   // the value to pass to the generator
                        r4);  // the JSGeneratorObject to resume
@@ -331,9 +362,9 @@ constexpr auto RunMicrotasksEntryDescriptor::registers() {
   return RegisterArray(r3, r4);
 }
 
-constexpr auto WasmNewJSToWasmWrapperDescriptor::registers() {
+constexpr auto WasmJSToWasmWrapperDescriptor::registers() {
   // Arbitrarily picked register.
-  return RegisterArray(r11);
+  return RegisterArray(r3);
 }
 }  // namespace internal
 }  // namespace v8

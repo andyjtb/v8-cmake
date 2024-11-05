@@ -204,7 +204,7 @@ ClassScope::ClassScope(IsolateT* isolate, Zone* zone,
   // If the class variable is context-allocated and its index is
   // saved for deserialization, deserialize it.
   if (scope_info->HasSavedClassVariable()) {
-    String name;
+    Tagged<String> name;
     int index;
     std::tie(name, index) = scope_info->SavedClassVariable();
     DCHECK_EQ(scope_info->ContextLocalMode(index), VariableMode::kConst);
@@ -412,7 +412,7 @@ bool Scope::ContainsAsmModule() const {
 
 template <typename IsolateT>
 Scope* Scope::DeserializeScopeChain(IsolateT* isolate, Zone* zone,
-                                    ScopeInfo scope_info,
+                                    Tagged<ScopeInfo> scope_info,
                                     DeclarationScope* script_scope,
                                     AstValueFactory* ast_value_factory,
                                     DeserializationMode deserialization_mode) {
@@ -422,8 +422,8 @@ Scope* Scope::DeserializeScopeChain(IsolateT* isolate, Zone* zone,
   Scope* outer_scope = nullptr;
   bool cache_scope_found = false;
   while (!scope_info.is_null()) {
-    if (scope_info.scope_type() == WITH_SCOPE) {
-      if (scope_info.IsDebugEvaluateScope()) {
+    if (scope_info->scope_type() == WITH_SCOPE) {
+      if (scope_info->IsDebugEvaluateScope()) {
         outer_scope =
             zone->New<DeclarationScope>(zone, FUNCTION_SCOPE, ast_value_factory,
                                         handle(scope_info, isolate));
@@ -434,50 +434,50 @@ Scope* Scope::DeserializeScopeChain(IsolateT* isolate, Zone* zone,
                                        handle(scope_info, isolate));
       }
 
-    } else if (scope_info.scope_type() == SCRIPT_SCOPE) {
+    } else if (scope_info->scope_type() == SCRIPT_SCOPE) {
       // If we reach a script scope, it's the outermost scope. Install the
       // scope info of this script context onto the existing script scope to
       // avoid nesting script scopes.
       if (deserialization_mode == DeserializationMode::kIncludingVariables) {
         script_scope->SetScriptScopeInfo(handle(scope_info, isolate));
       }
-      if (scope_info.IsReplModeScope()) script_scope->set_is_repl_mode_scope();
-      DCHECK(!scope_info.HasOuterScopeInfo());
+      if (scope_info->IsReplModeScope()) script_scope->set_is_repl_mode_scope();
+      DCHECK(!scope_info->HasOuterScopeInfo());
       break;
-    } else if (scope_info.scope_type() == FUNCTION_SCOPE) {
+    } else if (scope_info->scope_type() == FUNCTION_SCOPE) {
       outer_scope = zone->New<DeclarationScope>(
           zone, FUNCTION_SCOPE, ast_value_factory, handle(scope_info, isolate));
 #if V8_ENABLE_WEBASSEMBLY
-      if (scope_info.IsAsmModule()) {
+      if (scope_info->IsAsmModule()) {
         outer_scope->AsDeclarationScope()->set_is_asm_module();
       }
 #endif  // V8_ENABLE_WEBASSEMBLY
-    } else if (scope_info.scope_type() == EVAL_SCOPE) {
+    } else if (scope_info->scope_type() == EVAL_SCOPE) {
       outer_scope = zone->New<DeclarationScope>(
           zone, EVAL_SCOPE, ast_value_factory, handle(scope_info, isolate));
-    } else if (scope_info.scope_type() == CLASS_SCOPE) {
+    } else if (scope_info->scope_type() == CLASS_SCOPE) {
       outer_scope = zone->New<ClassScope>(isolate, zone, ast_value_factory,
                                           handle(scope_info, isolate));
-    } else if (scope_info.scope_type() == BLOCK_SCOPE) {
-      if (scope_info.is_declaration_scope()) {
+    } else if (scope_info->scope_type() == BLOCK_SCOPE) {
+      if (scope_info->is_declaration_scope()) {
         outer_scope = zone->New<DeclarationScope>(
             zone, BLOCK_SCOPE, ast_value_factory, handle(scope_info, isolate));
       } else {
         outer_scope = zone->New<Scope>(zone, BLOCK_SCOPE, ast_value_factory,
                                        handle(scope_info, isolate));
       }
-    } else if (scope_info.scope_type() == MODULE_SCOPE) {
+    } else if (scope_info->scope_type() == MODULE_SCOPE) {
       outer_scope = zone->New<ModuleScope>(handle(scope_info, isolate),
                                            ast_value_factory);
     } else {
-      DCHECK_EQ(scope_info.scope_type(), CATCH_SCOPE);
-      DCHECK_EQ(scope_info.ContextLocalCount(), 1);
-      DCHECK_EQ(scope_info.ContextLocalMode(0), VariableMode::kVar);
-      DCHECK_EQ(scope_info.ContextLocalInitFlag(0), kCreatedInitialized);
-      DCHECK(scope_info.HasInlinedLocalNames());
-      String name = scope_info.ContextInlinedLocalName(0);
+      DCHECK_EQ(scope_info->scope_type(), CATCH_SCOPE);
+      DCHECK_EQ(scope_info->ContextLocalCount(), 1);
+      DCHECK_EQ(scope_info->ContextLocalMode(0), VariableMode::kVar);
+      DCHECK_EQ(scope_info->ContextLocalInitFlag(0), kCreatedInitialized);
+      DCHECK(scope_info->HasInlinedLocalNames());
+      Tagged<String> name = scope_info->ContextInlinedLocalName(0);
       MaybeAssignedFlag maybe_assigned =
-          scope_info.ContextLocalMaybeAssignedFlag(0);
+          scope_info->ContextLocalMaybeAssignedFlag(0);
       outer_scope =
           zone->New<Scope>(zone,
                            ast_value_factory->GetString(
@@ -491,7 +491,6 @@ Scope* Scope::DeserializeScopeChain(IsolateT* isolate, Zone* zone,
     if (cache_scope_found) {
       outer_scope->set_deserialized_scope_uses_external_cache();
     } else {
-      DCHECK(!cache_scope_found);
       cache_scope_found =
           outer_scope->is_declaration_scope() && !outer_scope->is_eval_scope();
     }
@@ -501,8 +500,8 @@ Scope* Scope::DeserializeScopeChain(IsolateT* isolate, Zone* zone,
     }
     current_scope = outer_scope;
     if (innermost_scope == nullptr) innermost_scope = current_scope;
-    scope_info = scope_info.HasOuterScopeInfo() ? scope_info.OuterScopeInfo()
-                                                : ScopeInfo();
+    scope_info = scope_info->HasOuterScopeInfo() ? scope_info->OuterScopeInfo()
+                                                 : Tagged<ScopeInfo>();
   }
 
   if (deserialization_mode == DeserializationMode::kIncludingVariables) {
@@ -534,12 +533,12 @@ template EXPORT_TEMPLATE_DEFINE(
 
 template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE)
     Scope* Scope::DeserializeScopeChain(
-        Isolate* isolate, Zone* zone, ScopeInfo scope_info,
+        Isolate* isolate, Zone* zone, Tagged<ScopeInfo> scope_info,
         DeclarationScope* script_scope, AstValueFactory* ast_value_factory,
         DeserializationMode deserialization_mode);
 template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE)
     Scope* Scope::DeserializeScopeChain(
-        LocalIsolate* isolate, Zone* zone, ScopeInfo scope_info,
+        LocalIsolate* isolate, Zone* zone, Tagged<ScopeInfo> scope_info,
         DeclarationScope* script_scope, AstValueFactory* ast_value_factory,
         DeserializationMode deserialization_mode);
 
@@ -970,14 +969,19 @@ Variable* Scope::LookupInScopeInfo(const AstRawString* name, Scope* cache) {
   DCHECK(!cache->deserialized_scope_uses_external_cache());
   // The case where where the cache can be another scope is when the cache scope
   // is the last scope that doesn't use an external cache.
+  //
+  // The one exception to this is when looking up the home object, which may
+  // skip multiple scopes that don't use an external cache (e.g., several arrow
+  // functions).
   DCHECK_IMPLIES(
       cache != this,
-      cache->outer_scope()->deserialized_scope_uses_external_cache());
+      cache->outer_scope()->deserialized_scope_uses_external_cache() ||
+          cache->GetHomeObjectScope() == this);
   DCHECK_NULL(cache->variables_.Lookup(name));
   DisallowGarbageCollection no_gc;
 
-  String name_handle = *name->string();
-  ScopeInfo scope_info = *scope_info_;
+  Tagged<String> name_handle = *name->string();
+  Tagged<ScopeInfo> scope_info = *scope_info_;
   // The Scope is backed up by ScopeInfo. This means it cannot operate in a
   // heap-independent mode, and all strings must be internalized immediately. So
   // it's ok to get the Handle<String> here.
@@ -989,20 +993,20 @@ Variable* Scope::LookupInScopeInfo(const AstRawString* name, Scope* cache) {
 
   {
     location = VariableLocation::CONTEXT;
-    index = scope_info.ContextSlotIndex(name->string(), &lookup_result);
+    index = scope_info->ContextSlotIndex(name->string(), &lookup_result);
     found = index >= 0;
   }
 
   if (!found && is_module_scope()) {
     location = VariableLocation::MODULE;
-    index = scope_info.ModuleIndex(name_handle, &lookup_result.mode,
-                                   &lookup_result.init_flag,
-                                   &lookup_result.maybe_assigned_flag);
+    index = scope_info->ModuleIndex(name_handle, &lookup_result.mode,
+                                    &lookup_result.init_flag,
+                                    &lookup_result.maybe_assigned_flag);
     found = index != 0;
   }
 
   if (!found) {
-    index = scope_info.FunctionContextSlotIndex(name_handle);
+    index = scope_info->FunctionContextSlotIndex(name_handle);
     if (index < 0) return nullptr;  // Nowhere found.
     Variable* var = AsDeclarationScope()->DeclareFunctionVar(name, cache);
     DCHECK_EQ(VariableMode::kConst, var->mode());
@@ -1011,7 +1015,7 @@ Variable* Scope::LookupInScopeInfo(const AstRawString* name, Scope* cache) {
   }
 
   if (!is_module_scope()) {
-    DCHECK_NE(index, scope_info.ReceiverContextSlotIndex());
+    DCHECK_NE(index, scope_info->ReceiverContextSlotIndex());
   }
 
   bool was_added;
@@ -2282,7 +2286,33 @@ Variable* Scope::LookupSloppyEval(VariableProxy* proxy, Scope* scope,
 
 void Scope::ResolveVariable(VariableProxy* proxy) {
   DCHECK(!proxy->is_resolved());
-  Variable* var = Lookup<kParsedScope>(proxy, this, nullptr);
+  Variable* var;
+  if (V8_UNLIKELY(proxy->is_home_object())) {
+    // VariableProxies of the home object cannot be resolved like a normal
+    // variable. Consider the case of a super.property usage in heritage
+    // position:
+    //
+    //   class C extends super.foo { m() { super.bar(); } }
+    //
+    // The super.foo property access is logically nested under C's class scope,
+    // which also has a home object due to its own method m's usage of
+    // super.bar(). However, super.foo must resolve super in C's outer scope.
+    //
+    // Because of the above, start resolving home objects directly at the home
+    // object scope instead of the current scope.
+    Scope* scope = GetDeclarationScope()->GetHomeObjectScope();
+    DCHECK_NOT_NULL(scope);
+    if (scope->scope_info_.is_null()) {
+      var = Lookup<kParsedScope>(proxy, scope, nullptr);
+    } else {
+      Scope* entry_cache = scope->deserialized_scope_uses_external_cache()
+                               ? GetNonEvalDeclarationScope()
+                               : scope;
+      var = Lookup<kDeserializedScope>(proxy, scope, nullptr, entry_cache);
+    }
+  } else {
+    var = Lookup<kParsedScope>(proxy, this, nullptr);
+  }
   DCHECK_NOT_NULL(var);
   ResolveTo(proxy, var);
 }
@@ -2752,48 +2782,6 @@ int Scope::ContextLocalCount() const {
          (is_function_var_in_context ? 1 : 0);
 }
 
-VariableProxy* Scope::NewHomeObjectVariableProxy(AstNodeFactory* factory,
-                                                 const AstRawString* name,
-                                                 int start_pos) {
-  // VariableProxies of the home object cannot be resolved like a normal
-  // variable. Consider the case of a super.property usage in heritage position:
-  //
-  //   class C extends super.foo { m() { super.bar(); } }
-  //
-  // The super.foo property access is logically nested under C's class scope,
-  // which also has a home object due to its own method m's usage of
-  // super.bar(). However, super.foo must resolve super in C's outer scope.
-  //
-  // Because of the above, home object VariableProxies are always made directly
-  // on the Scope that needs the home object instead of the innermost scope.
-  DCHECK(needs_home_object());
-  if (!scope_info_.is_null()) {
-    // This is a lazy compile, so the home object's context slot is already
-    // known.
-    Variable* home_object = variables_.Lookup(name);
-    if (home_object == nullptr) {
-      VariableLookupResult lookup_result;
-      int index = scope_info_->ContextSlotIndex(name->string(), &lookup_result);
-      DCHECK_GE(index, 0);
-      bool was_added;
-      home_object = variables_.Declare(zone(), this, name, lookup_result.mode,
-                                       NORMAL_VARIABLE, lookup_result.init_flag,
-                                       lookup_result.maybe_assigned_flag,
-                                       IsStaticFlag::kNotStatic, &was_added);
-      DCHECK(was_added);
-      home_object->AllocateTo(VariableLocation::CONTEXT, index);
-    }
-    return factory->NewVariableProxy(home_object, start_pos);
-  }
-  // This is not a lazy compile. Add the unresolved home object VariableProxy to
-  // the unresolved list of the home object scope, which is not necessarily the
-  // innermost scope.
-  VariableProxy* proxy =
-      factory->NewVariableProxy(name, NORMAL_VARIABLE, start_pos);
-  AddUnresolved(proxy);
-  return proxy;
-}
-
 bool IsComplementaryAccessorPair(VariableMode a, VariableMode b) {
   switch (a) {
     case VariableMode::kPrivateGetterOnly:
@@ -2806,7 +2794,7 @@ bool IsComplementaryAccessorPair(VariableMode a, VariableMode b) {
 }
 
 void ClassScope::FinalizeReparsedClassScope(
-    Isolate* isolate, MaybeHandle<ScopeInfo> maybe_scope_info,
+    Isolate* isolate, MaybeHandle<ScopeInfo> maybe_class_scope_info,
     AstValueFactory* ast_value_factory, bool needs_allocation_fixup) {
   // Set this bit so that DeclarationScope::Analyze recognizes
   // the reparsed instance member initializer scope.
@@ -2822,10 +2810,10 @@ void ClassScope::FinalizeReparsedClassScope(
   // the class scope from ScopeInfo, so that we don't need to run
   // resolution and allocation on these variables again when generating
   // code for the initializer function.
-  DCHECK(!maybe_scope_info.is_null());
-  Handle<ScopeInfo> scope_info = maybe_scope_info.ToHandleChecked();
+  DCHECK(!maybe_class_scope_info.is_null());
+  Handle<ScopeInfo> scope_info = maybe_class_scope_info.ToHandleChecked();
   DCHECK_EQ(scope_info->scope_type(), CLASS_SCOPE);
-  DCHECK_EQ(scope_info->StartPosition(), start_position_);
+  DCHECK_EQ(scope_info->EndPosition(), end_position_);
 
   int context_header_length = scope_info->ContextHeaderLength();
   DisallowGarbageCollection no_gc;

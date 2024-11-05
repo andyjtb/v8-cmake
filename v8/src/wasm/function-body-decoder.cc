@@ -68,15 +68,14 @@ BytecodeIterator::BytecodeIterator(const uint8_t* start, const uint8_t* end,
   if (pc_ > end_) pc_ = end_;
 }
 
-DecodeResult ValidateFunctionBody(const WasmFeatures& enabled,
+DecodeResult ValidateFunctionBody(Zone* zone, WasmFeatures enabled,
                                   const WasmModule* module,
                                   WasmFeatures* detected,
                                   const FunctionBody& body) {
   // Asm.js functions should never be validated; they are valid by design.
   DCHECK_EQ(kWasmOrigin, module->origin);
-  Zone zone(GetWasmEngine()->allocator(), ZONE_NAME);
   WasmFullDecoder<Decoder::FullValidationTag, EmptyInterface> decoder(
-      &zone, module, enabled, detected, body);
+      zone, module, enabled, detected, body);
   decoder.Decode();
   return decoder.toResult(nullptr);
 }
@@ -200,7 +199,7 @@ bool PrintRawWasmCode(AccountingAllocator* allocator, const FunctionBody& body,
     }
     if (line_numbers) line_numbers->push_back(i.position());
     if (opcode == kExprElse || opcode == kExprCatch ||
-        opcode == kExprCatchAll) {
+        opcode == kExprCatchAll || opcode == kExprDelegate) {
       control_depth--;
     }
 
@@ -270,6 +269,15 @@ bool PrintRawWasmCode(AccountingAllocator* allocator, const FunctionBody& body,
         control_depth++;
         break;
       }
+      case kExprTryTable: {
+        BlockTypeImmediate block_imm(WasmFeatures::All(), &i, i.pc() + 1,
+                                     Decoder::kNoValidation);
+        TryTableImmediate imm(&i, i.pc() + block_imm.length + 1,
+                              Decoder::kNoValidation);
+        os << " entries=" << imm.table_count;
+        control_depth++;
+        break;
+      }
       case kExprEnd:
         os << " @" << i.pc_offset();
         control_depth--;
@@ -292,6 +300,12 @@ bool PrintRawWasmCode(AccountingAllocator* allocator, const FunctionBody& body,
       case kExprCallIndirect: {
         CallIndirectImmediate imm(&i, i.pc() + 1, Decoder::kNoValidation);
         os << " sig #" << imm.sig_imm.index;
+        CHECK(decoder.Validate(i.pc() + 1, imm));
+        os << ": " << *imm.sig;
+        break;
+      }
+      case kExprCallRef: {
+        SigIndexImmediate imm(&i, i.pc() + 1, Decoder::kNoValidation);
         CHECK(decoder.Validate(i.pc() + 1, imm));
         os << ": " << *imm.sig;
         break;
